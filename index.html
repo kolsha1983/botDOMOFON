@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Домофонные ключи</title>
+  <title>Домофонные ключи — Редактор</title>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js"></script>
   <style>
     body {
@@ -12,14 +12,20 @@
       background-color: #f9f9f9;
       color: #333;
     }
-    h1 {
-      color: #2c3e50;
+    h1 { color: #2c3e50; }
+    .controls {
+      margin: 15px 0;
+    }
+    button {
+      padding: 8px 12px;
+      margin-right: 10px;
+      font-size: 14px;
+      cursor: pointer;
     }
     .search-box {
-      padding: 10px;
-      width: 350px;
-      font-size: 16px;
-      margin-bottom: 20px;
+      padding: 8px;
+      width: 300px;
+      margin-bottom: 15px;
       border: 1px solid #ccc;
       border-radius: 4px;
     }
@@ -39,8 +45,10 @@
       position: sticky;
       top: 0;
     }
-    tr:hover {
-      background-color: #f5f5f5;
+    tr:hover td { background-color: #f5f5f5; }
+    td[contenteditable="true"] {
+      outline: 1px dashed #3498db;
+      cursor: text;
     }
     #status {
       margin-bottom: 10px;
@@ -51,89 +59,131 @@
 </head>
 <body>
 
-  <h1>🔑 Домофонные ключи</h1>
+  <h1>🔑 Домофонные ключи — Редактор</h1>
   <div id="status">Загрузка данных...</div>
-  <input type="text" id="search" class="search-box" placeholder="Поиск по адресу, коду, частоте или подъездам..." />
+
+  <div class="controls">
+    <input type="text" id="search" class="search-box" placeholder="Поиск..." />
+    <button onclick="addRow()">➕ Добавить запись</button>
+    <button onclick="exportToExcel()">💾 Скачать Excel</button>
+  </div>
 
   <div id="table-container"></div>
 
   <script>
-    let originalData = [];
+    let data = [];
+    const headers = ['Адрес', 'Код', 'Частота', 'Подъезды'];
 
+    // Загрузка Excel
     async function loadExcel() {
       try {
         const response = await fetch('domofon.xlsx');
-        if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        const arrayBuffer = await response.arrayBuffer();
-        const workbook = XLSX.read(arrayBuffer, { type: 'array' });
-        const sheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[sheetName];
-        const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+        if (!response.ok) throw new Error('Файл не найден');
+        const ab = await response.arrayBuffer();
+        const wb = XLSX.read(ab, { type: 'array' });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const json = XLSX.utils.sheet_to_json(ws, { header: 1 });
 
-        // Удаляем пустые строки и формируем объекты
-        const headers = jsonData[0]?.map(h => (h || '').toString().trim()) || ['Адрес', 'Код', 'Частота', 'Подъезды'];
-        originalData = jsonData.slice(1)
-          .filter(row => row && row.some(cell => {
-            const val = cell?.toString().trim();
-            return val && val !== 'undefined' && val !== 'null';
-          }))
-          .map(row => {
-            const obj = {};
-            headers.forEach((h, i) => {
-              obj[h] = (row[i] !== undefined && row[i] !== null) ? String(row[i]).trim() : '';
-            });
-            return obj;
+        // Пропускаем первую строку, если она пустая или не совпадает с ожидаемыми заголовками
+        const rows = json.slice(1).filter(row =>
+          row && row.length > 0 && row.some(cell => String(cell).trim())
+        );
+
+        data = rows.map(row => {
+          const obj = {};
+          headers.forEach((h, i) => {
+            obj[h] = (row[i] !== undefined && row[i] !== null) ? String(row[i]).trim() : '';
           });
+          return obj;
+        });
 
-        document.getElementById('status').textContent = `✅ Загружено ${originalData.length} записей`;
-        renderTable(originalData);
+        document.getElementById('status').textContent = `✅ Загружено ${data.length} записей`;
+        renderTable();
       } catch (err) {
         console.error(err);
         document.getElementById('status').textContent = `❌ Ошибка: ${err.message}`;
       }
     }
 
-    function renderTable(data) {
-      if (!data || data.length === 0) {
-        document.getElementById('table-container').innerHTML = '<p>Нет данных для отображения.</p>';
+    function renderTable(filteredData = null) {
+      const displayData = filteredData || data;
+      if (displayData.length === 0) {
+        document.getElementById('table-container').innerHTML = '<p>Нет данных</p>';
         return;
       }
 
-      const headers = Object.keys(data[0]);
-      let html = '<table><thead><tr>';
-      headers.forEach(h => {
-        html += `<th>${h}</th>`;
-      });
-      html += '</tr></thead><tbody>';
+      let html = `<table><thead><tr>`;
+      headers.forEach(h => html += `<th>${h}</th>`);
+      html += `<th>Действия</th></tr></thead><tbody>`;
 
-      data.forEach(row => {
-        html += '<tr>';
+      displayData.forEach((row, idx) => {
+        html += `<tr data-index="${idx}">`;
         headers.forEach(h => {
-          html += `<td>${row[h]}</td>`;
+          html += `<td contenteditable="true" data-field="${h}">${row[h]}</td>`;
         });
-        html += '</tr>';
+        html += `<td><button onclick="deleteRow(${idx})">🗑 Удалить</button></td></tr>`;
       });
-      html += '</tbody></table>';
 
+      html += `</tbody></table>`;
       document.getElementById('table-container').innerHTML = html;
+
+      // Сохраняем изменения при потере фокуса
+      document.querySelectorAll('td[contenteditable="true"]').forEach(cell => {
+        cell.addEventListener('blur', function() {
+          const idx = this.closest('tr').dataset.index;
+          const field = this.dataset.field;
+          data[idx][field] = this.textContent.trim();
+        });
+      });
     }
 
-    function filterTable() {
-      const query = document.getElementById('search').value.toLowerCase().trim();
-      if (!query) {
-        renderTable(originalData);
+    function addRow() {
+      const newRow = {};
+      headers.forEach(h => newRow[h] = '');
+      data.push(newRow);
+      renderTable();
+    }
+
+    function deleteRow(index) {
+      if (confirm('Удалить запись?')) {
+        data.splice(index, 1);
+        renderTable();
+      }
+    }
+
+    function exportToExcel() {
+      if (data.length === 0) {
+        alert('Нет данных для экспорта');
         return;
       }
 
-      const filtered = originalData.filter(row =>
-        Object.values(row).some(val => val.toLowerCase().includes(query))
-      );
+      // Преобразуем данные обратно в массив массивов
+      const wsData = [headers];
+      data.forEach(row => {
+        wsData.push(headers.map(h => row[h] || ''));
+      });
 
-      renderTable(filtered);
+      const ws = XLSX.utils.aoa_to_sheet(wsData);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Домофоны');
+
+      // Скачиваем файл
+      XLSX.writeFile(wb, 'domofon_updated.xlsx');
     }
 
-    // Инициализация
-    document.getElementById('search').addEventListener('input', filterTable);
+    document.getElementById('search').addEventListener('input', function() {
+      const q = this.value.toLowerCase().trim();
+      if (!q) {
+        renderTable();
+        return;
+      }
+      const filtered = data.filter(row =>
+        Object.values(row).some(val => val.toLowerCase().includes(q))
+      );
+      renderTable(filtered);
+    });
+
+    // Запуск
     loadExcel();
   </script>
 
